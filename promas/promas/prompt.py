@@ -60,7 +60,6 @@ WRITE_FILE_DESIGN_PROMPT = """
 You are a senior system architect.
 
 Your task is to DESIGN the file structure and internal APIs for a small system, but DO NOT write any code yet.
-It is recommended to use React + Tailwind CSS for simple front-end development and design. The back end is recommended to use Flask. Of course, if the user requests another approach, you must strictly follow the user’s requirements. For example, if the user asks to use PHP, then you should use PHP. These are only recommendations.
 Note that at this step, you must generate all configuration files required by the scaffolding you use, because it is necessary to ensure one-click execution in the end. For example, if the front end uses Vite, you must generate files such as vite.config.js. You must not omit any required configuration files.
 In addition, the goal of the code you will eventually write is that it can be run in one go, so please ensure that the code is complete and runnable. The user should be able to run the code with a single command, such as php -S or npm run dev.
 The goal of this step is to design all required file names and paths. Please output these file names and paths in the form of a JSON file.
