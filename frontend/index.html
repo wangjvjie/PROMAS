@@ -1,0 +1,986 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>SecDev Agent</title>
+
+<!-- Fonts -->
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;600;700&family=Space+Grotesk:wght@400;500;600;700&family=IBM+Plex+Mono:wght@300;400;500&display=swap" rel="stylesheet" />
+
+<!-- React -->
+<script crossorigin src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+<script crossorigin src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+<script crossorigin src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.9/babel.min.js"></script>
+
+<style>
+  :root {
+    --bg-primary: #0a0e14;
+    --bg-secondary: #0f1419;
+    --bg-tertiary: #151b23;
+    --bg-elevated: #1a2130;
+    --border: #1e2a3a;
+    --border-active: #2d4a6f;
+    --text-primary: #c5cdd8;
+    --text-secondary: #6b7d93;
+    --text-muted: #3d4f63;
+    --accent-cyan: #39bae6;
+    --accent-green: #7fd962;
+    --accent-orange: #ff8f40;
+    --accent-red: #ff6b6b;
+    --accent-purple: #d2a6ff;
+    --accent-yellow: #e6b450;
+    --glow-cyan: rgba(57, 186, 230, 0.15);
+    --glow-green: rgba(127, 217, 98, 0.15);
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    font-family: 'IBM Plex Mono', 'JetBrains Mono', monospace;
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    overflow: hidden;
+    height: 100vh;
+  }
+
+  /* Scrollbar */
+  ::-webkit-scrollbar { width: 6px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+  ::-webkit-scrollbar-thumb:hover { background: var(--border-active); }
+
+  /* Layout */
+  #root { height: 100vh; display: flex; flex-direction: column; }
+
+  .app-header {
+    height: 48px;
+    background: var(--bg-secondary);
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    padding: 0 20px;
+    gap: 12px;
+    flex-shrink: 0;
+  }
+
+  .logo {
+    font-family: 'JetBrains Mono', monospace;
+    font-weight: 700;
+    font-size: 14px;
+    color: var(--accent-cyan);
+    letter-spacing: 1px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .logo-icon {
+    width: 20px;
+    height: 20px;
+    border: 2px solid var(--accent-cyan);
+    border-radius: 4px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 11px;
+    box-shadow: 0 0 8px var(--glow-cyan);
+  }
+
+  .header-status {
+    font-size: 11px;
+    color: var(--text-secondary);
+    margin-left: auto;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .status-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--text-muted);
+  }
+
+  .status-dot.active {
+    background: var(--accent-green);
+    box-shadow: 0 0 8px var(--glow-green);
+    animation: pulse 2s infinite;
+  }
+
+  @keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.5; }
+  }
+
+  .main-content {
+    flex: 1;
+    display: flex;
+    overflow: hidden;
+  }
+
+  /* Left Panel: Event Stream */
+  .panel-left {
+    width: 50%;
+    display: flex;
+    flex-direction: column;
+    border-right: 1px solid var(--border);
+  }
+
+  /* Right Panel: File Tree + Code */
+  .panel-right {
+    width: 50%;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .panel-header {
+    height: 36px;
+    background: var(--bg-tertiary);
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    padding: 0 14px;
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--text-secondary);
+    letter-spacing: 0.5px;
+    text-transform: uppercase;
+    flex-shrink: 0;
+    gap: 8px;
+  }
+
+  .panel-header .count {
+    background: var(--bg-elevated);
+    padding: 1px 6px;
+    border-radius: 3px;
+    font-size: 10px;
+    color: var(--text-muted);
+  }
+
+  /* Event Stream */
+  .event-stream {
+    flex: 1;
+    overflow-y: auto;
+    padding: 12px 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+
+  .event-item {
+    font-size: 12px;
+    line-height: 1.6;
+    padding: 3px 0;
+    display: flex;
+    gap: 8px;
+    animation: fadeIn 0.2s ease;
+  }
+
+  @keyframes fadeIn {
+    from { opacity: 0; transform: translateY(4px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+
+  .event-tag {
+    font-size: 9px;
+    font-weight: 600;
+    letter-spacing: 0.5px;
+    padding: 1px 5px;
+    border-radius: 2px;
+    flex-shrink: 0;
+    line-height: 1.8;
+    text-transform: uppercase;
+  }
+
+  .event-tag.think { background: rgba(210, 166, 255, 0.15); color: var(--accent-purple); }
+  .event-tag.act { background: rgba(57, 186, 230, 0.15); color: var(--accent-cyan); }
+  .event-tag.observe { background: rgba(127, 217, 98, 0.1); color: var(--accent-green); }
+  .event-tag.stage { background: rgba(230, 180, 80, 0.15); color: var(--accent-yellow); }
+  .event-tag.file { background: rgba(127, 217, 98, 0.15); color: var(--accent-green); }
+  .event-tag.error { background: rgba(255, 107, 107, 0.15); color: var(--accent-red); }
+  .event-tag.warn { background: rgba(255, 143, 64, 0.15); color: var(--accent-orange); }
+  .event-tag.retry { background: rgba(255, 143, 64, 0.2); color: var(--accent-orange); border: 1px dashed rgba(255, 143, 64, 0.4); }
+  .event-tag.log { background: rgba(107, 125, 147, 0.15); color: var(--text-secondary); }
+
+  .event-content {
+    color: var(--text-primary);
+    word-break: break-word;
+    flex: 1;
+  }
+
+  .event-content.muted { color: var(--text-secondary); }
+
+  /* Stage Progress */
+  .stage-bar {
+    height: 38px;
+    background: var(--bg-tertiary);
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    padding: 0 14px;
+    gap: 4px;
+    flex-shrink: 0;
+  }
+
+  .stage-pill {
+    font-size: 10px;
+    font-weight: 500;
+    padding: 4px 10px;
+    border-radius: 3px;
+    background: var(--bg-elevated);
+    color: var(--text-muted);
+    letter-spacing: 0.3px;
+    transition: all 0.3s;
+  }
+
+  .stage-pill.active {
+    background: var(--glow-cyan);
+    color: var(--accent-cyan);
+    box-shadow: 0 0 12px var(--glow-cyan);
+  }
+
+  .stage-pill.done {
+    background: var(--glow-green);
+    color: var(--accent-green);
+  }
+
+  .stage-arrow {
+    color: var(--text-muted);
+    font-size: 10px;
+  }
+
+  /* Input Area */
+  .input-area {
+    background: var(--bg-secondary);
+    border-top: 1px solid var(--border);
+    padding: 12px 14px;
+    flex-shrink: 0;
+  }
+
+  .input-row {
+    display: flex;
+    gap: 8px;
+    align-items: flex-end;
+  }
+
+  .input-wrapper {
+    flex: 1;
+    position: relative;
+  }
+
+  .input-wrapper textarea {
+    width: 100%;
+    min-height: 60px;
+    max-height: 200px;
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 10px 12px;
+    font-family: inherit;
+    font-size: 12px;
+    color: var(--text-primary);
+    resize: vertical;
+    outline: none;
+    transition: border-color 0.2s;
+  }
+
+  .input-wrapper textarea:focus {
+    border-color: var(--accent-cyan);
+    box-shadow: 0 0 0 1px var(--glow-cyan);
+  }
+
+  .input-wrapper textarea::placeholder {
+    color: var(--text-muted);
+  }
+
+  .btn {
+    font-family: inherit;
+    font-size: 11px;
+    font-weight: 600;
+    padding: 10px 18px;
+    border: none;
+    border-radius: 5px;
+    cursor: pointer;
+    letter-spacing: 0.5px;
+    text-transform: uppercase;
+    transition: all 0.2s;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .btn-primary {
+    background: var(--accent-cyan);
+    color: var(--bg-primary);
+  }
+
+  .btn-primary:hover {
+    box-shadow: 0 0 20px var(--glow-cyan);
+    transform: translateY(-1px);
+  }
+
+  .btn-primary:disabled {
+    background: var(--border);
+    color: var(--text-muted);
+    cursor: not-allowed;
+    transform: none;
+    box-shadow: none;
+  }
+
+  .btn-danger {
+    background: transparent;
+    border: 1px solid var(--accent-red);
+    color: var(--accent-red);
+  }
+
+  .btn-danger:hover {
+    background: rgba(255, 107, 107, 0.1);
+  }
+
+  .config-row {
+    display: flex;
+    gap: 10px;
+    margin-top: 8px;
+    flex-wrap: wrap;
+  }
+
+  .config-field {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+  }
+
+  .config-field label {
+    font-size: 10px;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+  }
+
+  .config-field select, .config-field input {
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    padding: 3px 6px;
+    font-family: inherit;
+    font-size: 11px;
+    color: var(--text-primary);
+    outline: none;
+  }
+
+  .config-field select:focus, .config-field input:focus {
+    border-color: var(--accent-cyan);
+  }
+
+  /* File Tree */
+  .file-tree {
+    flex: 0 0 200px;
+    overflow-y: auto;
+    border-bottom: 1px solid var(--border);
+    padding: 6px 0;
+  }
+
+  .file-entry {
+    padding: 4px 14px;
+    font-size: 11px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    transition: background 0.15s;
+  }
+
+  .file-entry:hover {
+    background: var(--bg-elevated);
+  }
+
+  .file-entry.active {
+    background: var(--glow-cyan);
+    color: var(--accent-cyan);
+  }
+
+  .file-icon {
+    font-size: 10px;
+    width: 14px;
+    text-align: center;
+    flex-shrink: 0;
+  }
+
+  .file-icon.written { color: var(--accent-green); }
+  .file-icon.planned { color: var(--text-muted); }
+
+  .file-name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  /* Code Viewer */
+  .code-viewer {
+    flex: 1;
+    overflow: auto;
+    padding: 12px;
+    background: var(--bg-primary);
+  }
+
+  .code-viewer pre {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 12px;
+    line-height: 1.7;
+    white-space: pre-wrap;
+    word-break: break-all;
+    color: var(--text-primary);
+    tab-size: 4;
+  }
+
+  .code-viewer .line-num {
+    display: inline-block;
+    width: 40px;
+    text-align: right;
+    padding-right: 12px;
+    color: var(--text-muted);
+    user-select: none;
+    font-size: 11px;
+  }
+
+  .code-viewer .empty-state {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    height: 100%;
+    color: var(--text-muted);
+    font-size: 12px;
+    font-style: italic;
+  }
+
+  /* Welcome Screen */
+  .welcome {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 16px;
+    padding: 40px;
+  }
+
+  .welcome-icon {
+    width: 64px;
+    height: 64px;
+    border: 2px solid var(--accent-cyan);
+    border-radius: 14px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 28px;
+    box-shadow: 0 0 30px var(--glow-cyan);
+    animation: float 3s ease-in-out infinite;
+  }
+
+  @keyframes float {
+    0%, 100% { transform: translateY(0); }
+    50% { transform: translateY(-8px); }
+  }
+
+  .welcome h2 {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 18px;
+    font-weight: 600;
+    color: var(--text-primary);
+    letter-spacing: 0.5px;
+  }
+
+  .welcome p {
+    font-size: 12px;
+    color: var(--text-secondary);
+    text-align: center;
+    max-width: 400px;
+    line-height: 1.7;
+  }
+
+  /* Responsive */
+  @media (max-width: 768px) {
+    .main-content { flex-direction: column; }
+    .panel-left, .panel-right { width: 100%; height: 50%; }
+    .panel-left { border-right: none; border-bottom: 1px solid var(--border); }
+  }
+</style>
+</head>
+<body>
+<div id="root"></div>
+
+<script type="text/babel">
+const { useState, useRef, useEffect, useCallback } = React;
+
+// ── Stages Config ───────────────────────────────────────────────────────
+const STAGES = [
+  { key: "prd", label: "PRD" },
+  { key: "architecture", label: "ARCH" },
+  { key: "threat_model", label: "THREAT" },
+  { key: "code", label: "CODE" },
+  { key: "verify", label: "VERIFY" },
+];
+
+// ── Main App ────────────────────────────────────────────────────────────
+function App() {
+  const [events, setEvents] = useState([]);
+  const [files, setFiles] = useState({});        // path -> content
+  const [selectedFile, setSelectedFile] = useState(null);
+  const [isRunning, setIsRunning] = useState(false);
+  const [currentStage, setCurrentStage] = useState("");
+  const [completedStages, setCompletedStages] = useState(new Set());
+  const [prompt, setPrompt] = useState("");
+  const [beginStage, setBeginStage] = useState("prd");
+  const [maxSteps, setMaxSteps] = useState(15);
+  const eventStreamRef = useRef(null);
+  const eventSourceRef = useRef(null);
+
+  const addEvent = useCallback((evt) => {
+    setEvents(prev => [...prev, { ...evt, _id: Date.now() + Math.random() }]);
+  }, []);
+
+  // ── SSE reconnection helper ──────────────────────────────────────
+  const connectToStream = useCallback((fromIndex) => {
+    // Abort any existing stream
+    if (eventSourceRef.current) {
+      eventSourceRef.current.abort();
+    }
+
+    const abortController = new AbortController();
+    eventSourceRef.current = abortController;
+
+    (async () => {
+      try {
+        const response = await fetch(`/api/stream?from_index=${fromIndex}`, {
+          signal: abortController.signal,
+        });
+        if (!response.ok) return;
+
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = "";
+
+        while (true) {
+          const { value, done } = await reader.read();
+          if (done) break;
+
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split("\n\n");
+          buffer = lines.pop() || "";
+
+          for (const line of lines) {
+            if (!line.startsWith("data: ")) continue;
+            try {
+              const evt = JSON.parse(line.slice(6));
+              addEvent(evt);
+
+              if (evt.type === "stage_start") {
+                setCurrentStage(evt.stage);
+              } else if (evt.type === "stage_end") {
+                setCompletedStages(prev => new Set([...prev, evt.stage]));
+                setCurrentStage("");
+              } else if ((evt.type === "file_written" || evt.type === "file_edited") && evt.file) {
+                try {
+                  const fileResp = await fetch(`/api/files/${evt.file}`);
+                  if (fileResp.ok) {
+                    const fileData = await fileResp.json();
+                    setFiles(prev => ({ ...prev, [fileData.path]: fileData.content }));
+                    setSelectedFile(prev => prev || fileData.path);
+                  }
+                } catch (e) { /* ignore */ }
+              } else if (evt.type === "done") {
+                setIsRunning(false);
+              }
+            } catch (e) { /* skip unparseable */ }
+          }
+        }
+      } catch (err) {
+        if (err.name !== "AbortError") {
+          // Connection lost — try to reconnect after a delay
+          setTimeout(async () => {
+            try {
+              const stateResp = await fetch("/api/state");
+              if (!stateResp.ok) return;
+              const state = await stateResp.json();
+              if (state.is_running) {
+                connectToStream(state.event_count);
+              } else {
+                setIsRunning(false);
+              }
+            } catch (e) {
+              setIsRunning(false);
+            }
+          }, 2000);
+        }
+      } finally {
+        // Stream ended naturally — pipeline done
+      }
+    })();
+
+    return abortController;
+  }, [addEvent]);
+
+  // ── Restore session on mount ──────────────────────────────────────
+  const [isRestoring, setIsRestoring] = useState(true);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const resp = await fetch("/api/state");
+        if (!resp.ok || cancelled) return;
+        const state = await resp.json();
+
+        if (!state.has_session || cancelled) return;
+
+        // Restore prompt
+        if (state.prompt) setPrompt(state.prompt);
+
+        // Restore events
+        if (state.events && state.events.length > 0) {
+          const restored = state.events.map((evt, i) => ({
+            ...evt,
+            _id: i + Math.random(),
+          }));
+          setEvents(restored);
+        }
+
+        // Restore files
+        if (state.files && Object.keys(state.files).length > 0) {
+          setFiles(state.files);
+          const firstFile = Object.keys(state.files).sort()[0];
+          if (firstFile) setSelectedFile(firstFile);
+        }
+
+        // Restore stages
+        if (state.completed_stages && state.completed_stages.length > 0) {
+          setCompletedStages(new Set(state.completed_stages));
+        }
+        if (state.current_stage) {
+          setCurrentStage(state.current_stage);
+        }
+
+        // If pipeline is STILL running, reconnect to the SSE stream
+        if (state.is_running) {
+          setIsRunning(true);
+          connectToStream(state.event_count);
+        }
+      } catch (e) {
+        // ignore — fresh start
+      } finally {
+        if (!cancelled) setIsRestoring(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+      if (eventSourceRef.current) eventSourceRef.current.abort();
+    };
+  }, [connectToStream]);
+
+  // Auto-scroll events
+  useEffect(() => {
+    if (eventStreamRef.current) {
+      const el = eventStreamRef.current;
+      el.scrollTop = el.scrollHeight;
+    }
+  }, [events]);
+
+  const handleGenerate = async () => {
+    if (!prompt.trim() || isRunning) return;
+
+    setIsRunning(true);
+    setEvents([]);
+    setFiles({});
+    setSelectedFile(null);
+    setCurrentStage("");
+    setCompletedStages(new Set());
+
+    // Abort any previous stream
+    if (eventSourceRef.current) {
+      eventSourceRef.current.abort();
+    }
+
+    try {
+      const response = await fetch("/api/generate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          prompt: prompt.trim(),
+          begin_stage: beginStage,
+          max_react_steps: maxSteps,
+        }),
+      });
+
+      if (!response.ok) {
+        const err = await response.text();
+        addEvent({ type: "error", content: `Server error: ${err}` });
+        setIsRunning(false);
+        return;
+      }
+
+      const abortController = new AbortController();
+      eventSourceRef.current = abortController;
+
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+
+      try {
+        while (true) {
+          const { value, done } = await reader.read();
+          if (done) break;
+
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split("\n\n");
+          buffer = lines.pop() || "";
+
+          for (const line of lines) {
+            if (!line.startsWith("data: ")) continue;
+            try {
+              const evt = JSON.parse(line.slice(6));
+              addEvent(evt);
+
+              if (evt.type === "stage_start") {
+                setCurrentStage(evt.stage);
+              } else if (evt.type === "stage_end") {
+                setCompletedStages(prev => new Set([...prev, evt.stage]));
+                setCurrentStage("");
+              } else if ((evt.type === "file_written" || evt.type === "file_edited") && evt.file) {
+                try {
+                  const fileResp = await fetch(`/api/files/${evt.file}`);
+                  if (fileResp.ok) {
+                    const fileData = await fileResp.json();
+                    setFiles(prev => ({ ...prev, [fileData.path]: fileData.content }));
+                    setSelectedFile(prev => prev || fileData.path);
+                  }
+                } catch (e) { /* ignore */ }
+              } else if (evt.type === "done") {
+                setIsRunning(false);
+              }
+            } catch (e) { /* skip unparseable */ }
+          }
+        }
+      } catch (readErr) {
+        // If the read fails (e.g. page navigation), the pipeline continues in background
+        if (readErr.name !== "AbortError") {
+          addEvent({ type: "error", content: `Stream interrupted: ${readErr.message}` });
+        }
+      }
+    } catch (err) {
+      addEvent({ type: "error", content: `Connection error: ${err.message}` });
+    } finally {
+      // Don't force isRunning=false here — the pipeline may still be running in background
+      // It will be set to false when we receive the "done" event
+    }
+  };
+
+  const handleStop = async () => {
+    try {
+      await fetch("/api/stop", { method: "POST" });
+    } catch (e) { /* ignore */ }
+    if (eventSourceRef.current) {
+      eventSourceRef.current.abort();
+      eventSourceRef.current = null;
+    }
+    setIsRunning(false);
+  };
+
+  const handleKeyDown = (e) => {
+    if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+      handleGenerate();
+    }
+  };
+
+  const fileList = Object.keys(files);
+  const hasStarted = events.length > 0;
+
+  return (
+    <div style={{ height: "100vh", display: "flex", flexDirection: "column" }}>
+      {/* Header */}
+      <div className="app-header">
+        <div className="logo">
+          <div className="logo-icon">🛡</div>
+          SECDEV AGENT
+        </div>
+        <div className="header-status">
+          <div className={`status-dot ${isRunning ? "active" : ""}`}></div>
+          {isRestoring ? "restoring..." : isRunning ? "generating..." : hasStarted ? "idle" : "ready"}
+        </div>
+      </div>
+
+      {/* Stage Bar */}
+      {hasStarted && (
+        <div className="stage-bar">
+          {STAGES.map((s, i) => (
+            <React.Fragment key={s.key}>
+              {i > 0 && <span className="stage-arrow">→</span>}
+              <span className={`stage-pill ${currentStage === s.key ? "active" : ""} ${completedStages.has(s.key) ? "done" : ""}`}>
+                {completedStages.has(s.key) ? "✓ " : ""}{s.label}
+              </span>
+            </React.Fragment>
+          ))}
+        </div>
+      )}
+
+      {/* Main Content */}
+      <div className="main-content">
+        {/* Left Panel */}
+        <div className="panel-left">
+          {!hasStarted ? (
+            <div className="welcome">
+              {isRestoring ? (
+                <>
+                  <div className="welcome-icon" style={{ opacity: 0.5 }}>🛡</div>
+                  <p style={{ color: "var(--text-muted)" }}>Restoring session...</p>
+                </>
+              ) : (
+                <>
+                  <div className="welcome-icon">🛡</div>
+                  <h2>SecDev Agent</h2>
+                  <p>
+                    ReAct-based coding agent that generates secure, production-grade project code.
+                    Describe your project below and watch the agent think, plan, and write.
+                  </p>
+                </>
+              )}
+            </div>
+          ) : (
+            <>
+              <div className="panel-header">
+                Agent Activity
+                <span className="count">{events.length}</span>
+              </div>
+              <div className="event-stream" ref={eventStreamRef}>
+                {events.map((evt) => (
+                  <EventItem key={evt._id} event={evt} />
+                ))}
+              </div>
+            </>
+          )}
+
+          {/* Input */}
+          <div className="input-area">
+            <div className="input-row">
+              <div className="input-wrapper">
+                <textarea
+                  value={prompt}
+                  onChange={(e) => setPrompt(e.target.value)}
+                  onKeyDown={handleKeyDown}
+                  placeholder="Describe your project... (Ctrl+Enter to generate)"
+                  disabled={isRunning}
+                />
+              </div>
+              {isRunning ? (
+                <button className="btn btn-danger" onClick={handleStop}>STOP</button>
+              ) : (
+                <button className="btn btn-primary" onClick={handleGenerate} disabled={!prompt.trim()}>
+                  ▶ RUN
+                </button>
+              )}
+            </div>
+            <div className="config-row">
+              <div className="config-field">
+                <label>From</label>
+                <select value={beginStage} onChange={(e) => setBeginStage(e.target.value)}>
+                  {STAGES.map(s => <option key={s.key} value={s.key}>{s.label}</option>)}
+                </select>
+              </div>
+              <div className="config-field">
+                <label>Max Steps</label>
+                <input type="number" value={maxSteps} onChange={(e) => setMaxSteps(Number(e.target.value))} min={5} max={30} style={{ width: 50 }} />
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* Right Panel */}
+        <div className="panel-right">
+          <div className="panel-header">
+            Files
+            <span className="count">{fileList.length}</span>
+          </div>
+
+          {fileList.length > 0 ? (
+            <>
+              <div className="file-tree">
+                {fileList.sort().map(path => (
+                  <div
+                    key={path}
+                    className={`file-entry ${selectedFile === path ? "active" : ""}`}
+                    onClick={() => setSelectedFile(path)}
+                  >
+                    <span className="file-icon written">●</span>
+                    <span className="file-name">{path}</span>
+                  </div>
+                ))}
+              </div>
+
+              <div className="panel-header" style={{ borderTop: "1px solid var(--border)" }}>
+                {selectedFile || "No file selected"}
+              </div>
+              <div className="code-viewer">
+                {selectedFile && files[selectedFile] ? (
+                  <pre>{files[selectedFile].split("\n").map((line, i) => (
+                    <div key={i}><span className="line-num">{i + 1}</span>{line}</div>
+                  ))}</pre>
+                ) : (
+                  <div className="empty-state">Select a file to view its content</div>
+                )}
+              </div>
+            </>
+          ) : (
+            <div className="code-viewer">
+              <div className="empty-state">
+                {hasStarted ? "Files will appear here as they are generated..." : "Generated files will appear here"}
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Event Item Component ────────────────────────────────────────────────
+function EventItem({ event }) {
+  const tagMap = {
+    agent_think: { label: "THINK", cls: "think" },
+    agent_act: { label: "ACT", cls: "act" },
+    agent_observe: { label: "OBS", cls: "observe" },
+    stage_start: { label: "STAGE", cls: "stage" },
+    stage_end: { label: "STAGE", cls: "stage" },
+    file_written: { label: "FILE", cls: "file" },
+    file_edited: { label: "FIX", cls: "warn" },
+    error: { label: "ERR", cls: "error" },
+    warn: { label: "WARN", cls: "warn" },
+    retry: { label: "RETRY", cls: "retry" },
+    log: { label: "LOG", cls: "log" },
+    done: { label: "DONE", cls: "file" },
+  };
+
+  const tag = tagMap[event.type] || { label: event.type, cls: "log" };
+
+  let content = event.content || "";
+  if (event.type === "stage_start") content = `▶ ${event.stage} started`;
+  if (event.type === "stage_end") content = `✓ ${event.stage} complete`;
+  if (event.type === "file_written") content = `✓ ${event.file} — ${event.content}`;
+  if (event.type === "file_edited") content = `✏ ${event.file} — ${event.content}`;
+
+  const isMuted = event.type === "log" || event.type === "agent_observe";
+
+  return (
+    <div className="event-item">
+      <span className={`event-tag ${tag.cls}`}>{tag.label}</span>
+      <span className={`event-content ${isMuted ? "muted" : ""}`}>{content}</span>
+    </div>
+  );
+}
+
+// ── Mount ───────────────────────────────────────────────────────────────
+ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+</script>
+</body>
+</html>
