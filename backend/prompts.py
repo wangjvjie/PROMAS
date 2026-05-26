@@ -214,6 +214,49 @@ Rules:
 - Trace transitively across files using dependency information
 """
 
+TM_REVIEW_CHAINS_PROMPT = """\
+You are a senior security architect. Review the generated invocation chains for
+accuracy and completeness against the architecture.
+
+## Architecture
+{arch}
+
+## Generated Entry Interfaces and Chains
+{entry_interfaces}
+
+## Static Validation Issues
+{static_issues}
+
+Return ONLY valid JSON:
+{{
+  "ok": true,
+  "issues": [
+    "short description of any missing, inaccurate, empty, cyclic, or unresolved chain"
+  ],
+  "entry_interfaces": [
+    {{
+      "interface": "POST /api/login",
+      "entry_function": "auth.py:handle_login",
+      "invocation_chain": [
+        "auth.py:handle_login",
+        "auth.py:verify_credentials",
+        "db.py:query_user",
+        "auth.py:create_session"
+      ]
+    }}
+  ]
+}}
+
+Rules:
+- Set ok=false if any entry interface is missing, inaccurate, incomplete, cyclic,
+  empty, or references functions not present in the architecture
+- If ok=false or static issues are listed, return corrected entry_interfaces
+- Keep the format "file:function_name"
+- Include all HTTP endpoints, CLI commands, WebSocket handlers, message queue
+  consumers, and cron jobs that appear in the architecture
+- Chains must be acyclic and in call order: entry → downstream callees → leaves
+"""
+
 TM_GENERATE_SC_AM_PROMPT = """\
 You are a senior security engineer. Produce the Global Security Context and Attacker Model.
 

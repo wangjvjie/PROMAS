@@ -12,6 +12,7 @@ from ...llm.client import LLMClient
 from ...prompts import (
     THREAT_MODELING_SIMPLE_PROMPT,
     TM_EXTRACT_CHAINS_PROMPT,
+    TM_REVIEW_CHAINS_PROMPT,
     TM_GENERATE_SC_AM_PROMPT,
     TM_ANALYZE_CHAIN_PROMPT,
     TM_JUDGE_PROMPT,
@@ -77,6 +78,72 @@ async def _run_full(
     if not entry_interfaces:
         yield SSEvent(type=EventType.WARN, stage="threat_model",
                       content="No entry interfaces found — falling back to simple mode")
+        async for e in _run_simple(prompt, state, llm):
+            yield e
+        return
+
+    # Step 1b: Static + LLM validation of invocation-chain accuracy/completeness
+    static_issues = _validate_invocation_chains(entry_interfaces, state)
+    if static_issues:
+        issue_summary = "\n".join(f"  - {iss}" for iss in static_issues[:20])
+        yield SSEvent(type=EventType.WARN, stage="threat_model",
+                      content=f"Invocation-chain static check found {len(static_issues)} issue(s):\n{issue_summary}")
+    else:
+        yield SSEvent(type=EventType.LOG, stage="threat_model",
+                      content="Invocation-chain static check passed")
+
+    review_prompt = TM_REVIEW_CHAINS_PROMPT.format(
+        arch=arch,
+        entry_interfaces=json.dumps(entry_interfaces, indent=2, ensure_ascii=False),
+        static_issues=(
+            "\n".join(f"- {iss}" for iss in static_issues)
+            if static_issues else "(none)"
+        ),
+    )
+    try:
+        review_resp = await llm.chat(
+            [{"role": "user", "content": review_prompt}],
+            max_tokens=4096,
+            json_mode=True,
+        )
+        review_data = _extract_json(review_resp)
+        review_issues = _coerce_str_list(review_data.get("issues", []))
+        review_ok = _coerce_bool(review_data.get("ok", False))
+        reviewed_interfaces = review_data.get("entry_interfaces", [])
+
+        should_replace = static_issues or review_issues or not review_ok
+        if should_replace and isinstance(reviewed_interfaces, list) and reviewed_interfaces:
+            repaired_interfaces = _normalize_entry_interfaces(reviewed_interfaces)
+            if repaired_interfaces:
+                entry_interfaces = repaired_interfaces
+                yield SSEvent(type=EventType.LOG, stage="threat_model",
+                              content="Invocation chains repaired after LLM review")
+            else:
+                yield SSEvent(type=EventType.WARN, stage="threat_model",
+                              content="LLM chain review returned only malformed repairs; keeping original chains")
+        elif review_issues or not review_ok:
+            issue_summary = "\n".join(f"  - {iss}" for iss in review_issues[:20]) or "  - LLM marked chains as incomplete/inaccurate"
+            yield SSEvent(type=EventType.WARN, stage="threat_model",
+                          content=f"LLM chain review reported issue(s) but returned no usable repair:\n{issue_summary}")
+        else:
+            yield SSEvent(type=EventType.LOG, stage="threat_model",
+                          content="LLM chain review passed")
+
+        remaining_issues = _validate_invocation_chains(entry_interfaces, state)
+        if remaining_issues:
+            issue_summary = "\n".join(f"  - {iss}" for iss in remaining_issues[:20])
+            yield SSEvent(type=EventType.WARN, stage="threat_model",
+                          content=f"{len(remaining_issues)} invocation-chain issue(s) remain after review:\n{issue_summary}")
+        else:
+            yield SSEvent(type=EventType.LOG, stage="threat_model",
+                          content="Invocation-chain validation passed after review")
+    except Exception as e:
+        yield SSEvent(type=EventType.WARN, stage="threat_model",
+                      content=f"LLM chain review failed: {e}")
+
+    if not entry_interfaces:
+        yield SSEvent(type=EventType.WARN, stage="threat_model",
+                      content="No usable entry interfaces after validation — falling back to simple mode")
         async for e in _run_simple(prompt, state, llm):
             yield e
         return
@@ -219,6 +286,157 @@ async def _run_full(
     state.threat_model = ThreatModel(raw_text=final)
     yield SSEvent(type=EventType.LOG, stage="threat_model",
                   content=f"Threat model complete ({len(final)} chars, {len(global_ft)} functions)")
+
+
+def _normalize_entry_interfaces(raw_entries: list) -> list[dict]:
+    """Keep only well-formed entry-interface records returned by the LLM."""
+    normalized: list[dict] = []
+    for raw in raw_entries:
+        if not isinstance(raw, dict):
+            continue
+        chain = raw.get("invocation_chain", [])
+        if not isinstance(chain, list):
+            chain = [chain] if chain else []
+        chain = [str(item).strip() for item in chain if _is_present_ref(item)]
+        normalized.append({
+            "interface": str(raw.get("interface", "")).strip(),
+            "entry_function": str(raw.get("entry_function", "")).strip(),
+            "invocation_chain": chain,
+        })
+    return normalized
+
+
+def _validate_invocation_chains(entry_interfaces: list, state: ProjectState) -> list[str]:
+    """Static checks for generated invocation chains.
+
+    Covers empty/null references, cyclic chains, entry-function mismatch, and
+    function references not found in the architecture.
+    """
+    issues: list[str] = []
+    known_refs = _build_arch_function_refs(state)
+
+    for idx, ei in enumerate(entry_interfaces, 1):
+        if not isinstance(ei, dict):
+            issues.append(f"entry #{idx}: not an object")
+            continue
+
+        iface = str(ei.get("interface", f"entry #{idx}") or f"entry #{idx}").strip()
+        entry_fn = ei.get("entry_function", "")
+        chain = ei.get("invocation_chain", [])
+
+        if not _is_present_ref(entry_fn):
+            issues.append(f"{iface}: empty entry_function")
+
+        if not isinstance(chain, list):
+            issues.append(f"{iface}: invocation_chain is not a list")
+            continue
+
+        if not chain:
+            issues.append(f"{iface}: empty invocation_chain")
+            continue
+
+        normalized_chain: list[str] = []
+        for pos, ref in enumerate(chain, 1):
+            if not _is_present_ref(ref):
+                issues.append(f"{iface}: empty/null reference at chain position {pos}")
+                continue
+            ref_s = str(ref).strip()
+            normalized_chain.append(ref_s)
+            if ":" not in ref_s:
+                issues.append(f"{iface}: '{ref_s}' should use file:function format")
+            elif not _ref_exists(ref_s, known_refs):
+                issues.append(f"{iface}: '{ref_s}' not found in architecture")
+
+        entry_fn_s = str(entry_fn).strip() if _is_present_ref(entry_fn) else ""
+        if entry_fn_s and normalized_chain:
+            if not _same_ref(entry_fn_s, normalized_chain[0], known_refs):
+                issues.append(
+                    f"{iface}: entry_function '{entry_fn_s}' does not match first chain node '{normalized_chain[0]}'"
+                )
+            if ":" in entry_fn_s and not _ref_exists(entry_fn_s, known_refs):
+                issues.append(f"{iface}: entry_function '{entry_fn_s}' not found in architecture")
+
+        seen: set[str] = set()
+        for ref in normalized_chain:
+            canonical = _canonical_ref(ref, known_refs)
+            if canonical in seen:
+                issues.append(f"{iface}: cyclic/repeated chain reference '{ref}'")
+                break
+            seen.add(canonical)
+
+    return issues
+
+
+def _build_arch_function_refs(state: ProjectState) -> dict[str, str]:
+    """Return alias -> canonical function references from the architecture."""
+    refs: dict[str, str] = {}
+    for f in state.architecture.files:
+        file_key = _file_key(f.name, f.path)
+        file_aliases = {file_key, f.name}
+        if file_key.endswith("/" + f.name):
+            file_aliases.add(file_key[: -(len(f.name) + 1)])
+        for fn in f.functions:
+            _add_ref_aliases(refs, file_aliases, fn.name, f"{file_key}:{fn.name}")
+        for cls in f.classes:
+            for method in cls.methods:
+                method_name = str(method).strip().rstrip("()")
+                if not method_name:
+                    continue
+                _add_ref_aliases(refs, file_aliases, method_name, f"{file_key}:{method_name}")
+                _add_ref_aliases(refs, file_aliases, f"{cls.class_name}.{method_name}", f"{file_key}:{cls.class_name}.{method_name}")
+    return refs
+
+
+def _add_ref_aliases(refs: dict[str, str], file_aliases: set[str], symbol: str, canonical: str):
+    symbol = str(symbol).strip()
+    if not symbol:
+        return
+    for file_alias in file_aliases:
+        refs[f"{file_alias}:{symbol}".lower()] = canonical
+    refs[symbol.lower()] = canonical
+
+
+def _file_key(name: str, path: str) -> str:
+    p = str(path or "").strip().rstrip("/")
+    while p.startswith("./"):
+        p = p[2:]
+    p = p.lstrip(".").lstrip("/")
+    return name if not p else f"{p}/{name}"
+
+
+def _ref_exists(ref: str, known_refs: dict[str, str]) -> bool:
+    return _canonical_ref(ref, known_refs) in set(known_refs.values())
+
+
+def _same_ref(a: str, b: str, known_refs: dict[str, str]) -> bool:
+    return _canonical_ref(a, known_refs) == _canonical_ref(b, known_refs)
+
+
+def _canonical_ref(ref: str, known_refs: dict[str, str]) -> str:
+    return known_refs.get(str(ref).strip().lower(), str(ref).strip())
+
+
+def _is_present_ref(value) -> bool:
+    if value is None:
+        return False
+    text = str(value).strip()
+    return bool(text) and text.lower() not in {"null", "none", "undefined", "?", "n/a"}
+
+
+def _coerce_str_list(value) -> list[str]:
+    if isinstance(value, list):
+        return [str(v).strip() for v in value if str(v).strip()]
+    if value:
+        return [str(value).strip()]
+    return []
+
+
+def _coerce_bool(value) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in {"true", "1", "yes", "y"}
+    return bool(value)
 
 
 async def _reanalyze_variant(
