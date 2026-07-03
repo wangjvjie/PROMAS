@@ -325,6 +325,48 @@ Rules:
 - Skip functions with no plausible security-relevant attack surface
 """
 
+TM_MERGE_CHAIN_THREATS_PROMPT = """\
+You are a senior security engineer. Merge multiple per-chain threat analyses into
+one complete project-wide function threat model.
+
+## Global Security Context
+{sc_am}
+
+## Architecture
+{arch_excerpt}
+
+## Per-chain Threat Analyses
+{chain_threats}
+
+Return ONLY valid JSON:
+{{
+  "function_threats": [
+    {{
+      "function": "file:function_name",
+      "threats": [
+        {{
+          "cwe": "CWE-89",
+          "name": "SQL Injection",
+          "attack_vector": "Attacker controls username through POST /api/login before it reaches query_user()",
+          "protection": "Use parameterized queries in query_user() and validate username in handle_login()"
+        }}
+      ]
+    }}
+  ]
+}}
+
+Rules:
+- Merge by function, not by entry interface.
+- Preserve distinct threats for the same function when they come from different
+  entry interfaces, parameters, trust boundaries, or calling contexts.
+- Deduplicate only truly equivalent threats. Do not collapse different attack
+  vectors just because they share the same CWE.
+- If several chains imply the same protection, consolidate it into one clear,
+  implementable protection.
+- Keep actual function references in "file:function_name" format.
+- Output the most complete threat set needed by the code generation agent.
+"""
+
 TM_JUDGE_PROMPT = """\
 You are a security expert. Score this threat model candidate on three dimensions.
 

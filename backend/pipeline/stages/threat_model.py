@@ -15,6 +15,7 @@ from ...prompts import (
     TM_REVIEW_CHAINS_PROMPT,
     TM_GENERATE_SC_AM_PROMPT,
     TM_ANALYZE_CHAIN_PROMPT,
+    TM_MERGE_CHAIN_THREATS_PROMPT,
     TM_JUDGE_PROMPT,
 )
 
@@ -172,7 +173,7 @@ async def _run_full(
     yield SSEvent(type=EventType.LOG, stage="threat_model",
                   content=f"Step 3/5: Analyzing {len(entry_interfaces)} chains...")
 
-    global_ft: dict[str, list[dict]] = {}
+    chain_threat_results: list[dict] = []
     for idx, ei in enumerate(entry_interfaces, 1):
         iface_name = ei.get("interface", f"interface_{idx}")
         chain = ei.get("invocation_chain", [])
@@ -182,36 +183,30 @@ async def _run_full(
         yield SSEvent(type=EventType.LOG, stage="threat_model",
                       content=f"  Chain {idx}/{len(entry_interfaces)}: {iface_name}")
 
-        existing = {f: global_ft[f] for f in chain if f in global_ft}
-        existing_text = json.dumps(existing, indent=2, ensure_ascii=False) if existing else "(none)"
-
         p = TM_ANALYZE_CHAIN_PROMPT.format(
             sc_am=sc_am,
             interface=iface_name,
             chain=" → ".join(chain),
             arch_excerpt=arch,
-            existing_threats=existing_text,
+            existing_threats="(none - analyze this chain independently)",
         )
         try:
             resp = await llm.chat([{"role": "user", "content": p}], max_tokens=4096, json_mode=True)
             data = _extract_json(resp)
-            for entry in data.get("function_threats", []):
-                fn = entry.get("function", "")
-                new_threats = entry.get("threats", [])
-                if not fn or not new_threats:
-                    continue
-                if fn not in global_ft:
-                    global_ft[fn] = new_threats
-                else:
-                    existing_cwes = {t.get("cwe", "") for t in global_ft[fn]}
-                    for t in new_threats:
-                        if t.get("cwe", "") not in existing_cwes:
-                            global_ft[fn].append(t)
-                            existing_cwes.add(t.get("cwe", ""))
+            function_threats = _normalize_function_threats(data.get("function_threats", []))
+            if function_threats:
+                chain_threat_results.append({
+                    "interface": iface_name,
+                    "invocation_chain": chain,
+                    "function_threats": function_threats,
+                })
         except Exception as e:
             yield SSEvent(type=EventType.WARN, stage="threat_model",
                           content=f"  Chain {idx} analysis failed: {e}")
 
+    yield SSEvent(type=EventType.LOG, stage="threat_model",
+                  content=f"Merging {len(chain_threat_results)} chain threat model(s) with LLM...")
+    global_ft = await _merge_chain_threats(chain_threat_results, sc_am, arch, llm)
     total_threats = sum(len(ts) for ts in global_ft.values())
     yield SSEvent(type=EventType.LOG, stage="threat_model",
                   content=f"Function threats: {len(global_ft)} functions, {total_threats} threats")
@@ -439,42 +434,129 @@ def _coerce_bool(value) -> bool:
     return bool(value)
 
 
+def _normalize_function_threats(entries) -> list[dict]:
+    """Keep well-formed function threat records from an LLM JSON response."""
+    normalized: list[dict] = []
+    if not isinstance(entries, list):
+        return normalized
+
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        fn = str(entry.get("function", "")).strip()
+        threats = entry.get("threats", [])
+        if not fn or not isinstance(threats, list):
+            continue
+
+        clean_threats = []
+        for threat in threats:
+            if not isinstance(threat, dict):
+                continue
+            cwe = str(threat.get("cwe", "")).strip()
+            name = str(threat.get("name", "")).strip()
+            attack_vector = str(threat.get("attack_vector", "")).strip()
+            protection = str(threat.get("protection", "")).strip()
+            if not any([cwe, name, attack_vector, protection]):
+                continue
+            clean_threats.append({
+                "cwe": cwe,
+                "name": name,
+                "attack_vector": attack_vector,
+                "protection": protection,
+            })
+
+        if clean_threats:
+            normalized.append({"function": fn, "threats": clean_threats})
+
+    return normalized
+
+
+async def _merge_chain_threats(
+    chain_threats: list[dict],
+    sc_am: str,
+    arch: str,
+    llm: LLMClient,
+) -> dict[str, list[dict]]:
+    """Ask the LLM to semantically merge per-chain threat models."""
+    if not chain_threats:
+        return {}
+
+    fallback = _merge_chain_threats_locally(chain_threats)
+    p = TM_MERGE_CHAIN_THREATS_PROMPT.format(
+        sc_am=sc_am,
+        arch_excerpt=arch,
+        chain_threats=json.dumps(chain_threats, indent=2, ensure_ascii=False),
+    )
+
+    try:
+        resp = await llm.chat([{"role": "user", "content": p}], max_tokens=8192, json_mode=True)
+        data = _extract_json(resp)
+        merged_entries = _normalize_function_threats(data.get("function_threats", []))
+        merged = {
+            entry["function"]: entry["threats"]
+            for entry in merged_entries
+            if entry.get("function") and entry.get("threats")
+        }
+        return merged or fallback
+    except Exception:
+        return fallback
+
+
+def _merge_chain_threats_locally(chain_threats: list[dict]) -> dict[str, list[dict]]:
+    """Fallback merge that preserves context-specific threats."""
+    merged: dict[str, list[dict]] = {}
+    seen: dict[str, set[tuple[str, str, str]]] = {}
+
+    for chain_result in chain_threats:
+        for entry in _normalize_function_threats(chain_result.get("function_threats", [])):
+            fn = entry["function"]
+            merged.setdefault(fn, [])
+            seen.setdefault(fn, set())
+
+            for threat in entry["threats"]:
+                key = (
+                    str(threat.get("cwe", "")).strip().lower(),
+                    str(threat.get("attack_vector", "")).strip().lower(),
+                    str(threat.get("protection", "")).strip().lower(),
+                )
+                if key in seen[fn]:
+                    continue
+                merged[fn].append(threat)
+                seen[fn].add(key)
+
+    return merged
+
+
 async def _reanalyze_variant(
     entry_interfaces, sc_am, arch, base_ft, llm, temp
 ) -> dict[str, list[dict]]:
     """Re-analyze chains at higher temperature to produce a variant threat map."""
-    variant: dict[str, list[dict]] = {}
+    chain_threat_results: list[dict] = []
     for ei in entry_interfaces:
         chain = ei.get("invocation_chain", [])
         if not chain:
             continue
-        existing = {f: variant.get(f, []) for f in chain if f in variant}
-        existing_text = json.dumps(existing, indent=2, ensure_ascii=False) or "(none)"
         p = TM_ANALYZE_CHAIN_PROMPT.format(
             sc_am=sc_am,
             interface=ei.get("interface", ""),
             chain=" → ".join(chain),
             arch_excerpt=arch,
-            existing_threats=existing_text,
+            existing_threats="(none - analyze this chain independently)",
         )
         try:
             resp = await llm.chat([{"role": "user", "content": p}],
                                   max_tokens=4096, temperature=temp, json_mode=True)
             data = _extract_json(resp)
-            for entry in data.get("function_threats", []):
-                fn = entry.get("function", "")
-                ts = entry.get("threats", [])
-                if fn and ts:
-                    if fn not in variant:
-                        variant[fn] = ts
-                    else:
-                        cwes = {t.get("cwe", "") for t in variant[fn]}
-                        for t in ts:
-                            if t.get("cwe", "") not in cwes:
-                                variant[fn].append(t)
-                                cwes.add(t.get("cwe", ""))
+            function_threats = _normalize_function_threats(data.get("function_threats", []))
+            if function_threats:
+                chain_threat_results.append({
+                    "interface": ei.get("interface", ""),
+                    "invocation_chain": chain,
+                    "function_threats": function_threats,
+                })
         except Exception:
             pass
+    variant = await _merge_chain_threats(chain_threat_results, sc_am, arch, llm)
     return variant if variant else base_ft
 
 
